@@ -62,14 +62,14 @@ verify_github_digest() {
   [[ "$digest" == sha256:* ]] || fail "$label uses an unsupported GitHub digest: $digest"
   local expected="${digest#sha256:}"
   local actual
-  actual="$(sha256sum "$file" | awk '{print tolower($1)}')"
+  actual="$(sha256sum "$file" | awk '{gsub(/[^0-9A-Fa-f]/, "", $1); print tolower($1)}')"
   [[ "$actual" == "${expected,,}" ]] || fail "$label digest mismatch. Expected $expected, got $actual."
 }
 
 validate_manifest() {
   [[ -f "$MANIFEST_PATH" ]] || fail "Manifest not found: $MANIFEST_PATH"
   jq -e '
-    .schema_version == 1 and
+    .schema_version == 2 and
     (.app.name | type == "string" and length > 0) and
     (.app.package_name | type == "string" and length > 0) and
     (.app.version_name | type == "string" and length > 0) and
@@ -85,6 +85,14 @@ validate_manifest() {
     (.morphe.repository | type == "string" and test("^[^/]+/[^/]+$")) and
     .morphe.channel == "stable" and
     .morphe.bytecode_mode == "STRIP_FAST" and
+    .security_scan.provider == "virustotal" and
+    (.security_scan.mode == "disabled" or .security_scan.mode == "lookup_only" or .security_scan.mode == "upload_public") and
+    (.security_scan.required | type == "boolean") and
+    (.security_scan.request_interval_seconds | type == "number" and . >= 15 and floor == .) and
+    (.security_scan.max_wait_seconds | type == "number" and . >= 0 and floor == .) and
+    (.security_scan.block_on_detections | type == "boolean") and
+    (.security_scan.maximum_malicious | type == "number" and . >= 0 and floor == .) and
+    (.security_scan.maximum_suspicious | type == "number" and . >= 0 and floor == .) and
     (.signing.alias | type == "string" and length > 0) and
     (.signing.signer | type == "string" and length > 0) and
     .signing.store_password_mode == "none" and
@@ -176,10 +184,25 @@ bytecode_mode="$(json_string '.morphe.bytecode_mode')"
 signing_alias="$(json_string '.signing.alias')"
 signer_name="$(json_string '.signing.signer')"
 signing_certificate_sha256="$(json_string '.signing.certificate_sha256' | tr '[:upper:]' '[:lower:]')"
+vt_manifest_mode="$(json_string '.security_scan.mode')"
+vt_required="$(jq -r '.security_scan.required' "$MANIFEST_PATH")"
+vt_request_interval="$(jq -er '.security_scan.request_interval_seconds | numbers' "$MANIFEST_PATH")"
+vt_max_wait="$(jq -er '.security_scan.max_wait_seconds | numbers' "$MANIFEST_PATH")"
+vt_block_on_detections="$(jq -r '.security_scan.block_on_detections' "$MANIFEST_PATH")"
+vt_maximum_malicious="$(jq -er '.security_scan.maximum_malicious | numbers' "$MANIFEST_PATH")"
+vt_maximum_suspicious="$(jq -er '.security_scan.maximum_suspicious | numbers' "$MANIFEST_PATH")"
+vt_mode_override="${VT_MODE_OVERRIDE:-manifest}"
+case "$vt_mode_override" in
+  manifest) vt_mode="$vt_manifest_mode" ;;
+  disabled | lookup_only | upload_public) vt_mode="$vt_mode_override" ;;
+  *) fail "VT_MODE_OVERRIDE must be manifest, disabled, lookup_only, or upload_public." ;;
+esac
 readonly app_name package_name version_name version_code base_revision
 readonly base_source_provider base_source_url base_release_tag base_asset_name base_sha256
 readonly patch_repository morphe_repository bytecode_mode
 readonly signing_alias signer_name signing_certificate_sha256
+readonly vt_manifest_mode vt_required vt_request_interval vt_max_wait
+readonly vt_block_on_detections vt_maximum_malicious vt_maximum_suspicious vt_mode_override vt_mode
 readonly check_only="${CHECK_ONLY:-false}"
 readonly workflow_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-unknown}"
 
@@ -346,7 +369,7 @@ base_asset_count="$(jq --arg name "$base_asset_name" '[.assets[] | select(.name 
 
 download_release_asset "$build_repository" "$base_release_tag" "$base_asset_name" "$WORK_ROOT/input"
 readonly base_apk="$WORK_ROOT/input/$base_asset_name"
-actual_base_sha256="$(sha256sum "$base_apk" | awk '{print tolower($1)}')"
+actual_base_sha256="$(sha256sum "$base_apk" | awk '{gsub(/[^0-9A-Fa-f]/, "", $1); print tolower($1)}')"
 readonly actual_base_sha256
 [[ "$actual_base_sha256" == "$base_sha256" ]] || fail "Base APK SHA-256 mismatch. Expected $base_sha256, got $actual_base_sha256."
 
@@ -384,10 +407,29 @@ actual_applied_count="$(jq -er '.appliedPatches | length' "$patch_result")"
 [[ "$actual_applied_count" == "$enabled_patch_count" ]] || fail "Morphe applied $actual_applied_count patches, but $enabled_patch_count were enabled by default."
 unzip -t "$output_apk" >/dev/null || fail "The produced APK is not a valid ZIP/APK archive."
 
-patched_sha256="$(sha256sum "$output_apk" | awk '{print tolower($1)}')"
+patched_sha256="$(sha256sum "$output_apk" | awk '{gsub(/[^0-9A-Fa-f]/, "", $1); print tolower($1)}')"
 readonly patched_sha256
-readonly checksums="$WORK_ROOT/output/SHA256SUMS.txt"
-printf '%s  %s\n' "$patched_sha256" "$output_apk_name" >"$checksums"
+
+readonly virustotal_result="$WORK_ROOT/output/virustotal-result.json"
+VT_REQUEST_INTERVAL_SECONDS="$vt_request_interval" \
+VT_MAX_WAIT_SECONDS="$vt_max_wait" \
+  bash "$SCRIPT_DIR/virustotal.sh" "$output_apk" "$patched_sha256" "$vt_mode" "$virustotal_result"
+
+vt_status="$(jq -er '.status | strings' "$virustotal_result")"
+vt_reason="$(jq -r '.reason // empty' "$virustotal_result")"
+readonly vt_status vt_reason
+
+if [[ "$vt_required" == "true" && "$vt_status" != "found" && "$vt_status" != "uploaded" ]]; then
+  fail "VirusTotal is required, but its status is $vt_status${vt_reason:+: $vt_reason}."
+fi
+
+if [[ "$vt_block_on_detections" == "true" && ( "$vt_status" == "found" || "$vt_status" == "uploaded" ) ]]; then
+  vt_malicious="$(jq -er '.statistics.malicious // 0' "$virustotal_result")"
+  vt_suspicious="$(jq -er '.statistics.suspicious // 0' "$virustotal_result")"
+  if (( vt_malicious > vt_maximum_malicious || vt_suspicious > vt_maximum_suspicious )); then
+    fail "VirusTotal detection policy blocked the release: malicious=$vt_malicious, suspicious=$vt_suspicious."
+  fi
+fi
 
 readonly provenance="$WORK_ROOT/output/build-provenance.json"
 jq -n \
@@ -445,27 +487,84 @@ jq -n \
     workflow: {url: $workflow_url, source_commit: $source_commit, built_at: $built_at}
   }' >"$provenance"
 
+readonly build_info="$WORK_ROOT/output/build-info.json"
+jq -s '.[0] + {morphe_result: .[1], security_scan: .[2]}' \
+  "$provenance" "$patch_result" "$virustotal_result" >"$build_info"
+
+patch_changelog="$(jq -r '.body // ""' <<<"$patch_release_json" | awk '
+  /^# \[/ { next }
+  /^## [0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$/ { next }
+  /^\* Merge branch / { next }
+  /^\* merge dev into main/ { next }
+  NF { blank = 0; print; next }
+  !blank { print ""; blank = 1 }
+')"
+[[ -n "$patch_changelog" ]] || patch_changelog="No patch changelog was supplied for [$patch_tag]($patch_release_url)."
+readonly patch_changelog
+
+security_scan_summary=""
+if [[ "$vt_status" == "found" || "$vt_status" == "uploaded" ]]; then
+  vt_report_url="$(jq -er '.report_url | strings' "$virustotal_result")"
+  vt_malicious_display="$(jq -er '.statistics.malicious // 0' "$virustotal_result")"
+  vt_suspicious_display="$(jq -er '.statistics.suspicious // 0' "$virustotal_result")"
+  vt_engine_total="$(jq -er '[.statistics[] | numbers] | add // 0' "$virustotal_result")"
+  security_scan_summary="$(cat <<EOF
+## Security scan
+
+[VirusTotal report]($vt_report_url): **$vt_malicious_display malicious**, **$vt_suspicious_display suspicious** across $vt_engine_total engine results. Treat automated detections as signals, not a guarantee.
+EOF
+)"
+elif [[ "$vt_status" == "pending" ]]; then
+  vt_report_url="$(jq -er '.report_url | strings' "$virustotal_result")"
+  security_scan_summary="$(cat <<EOF
+## Security scan
+
+[VirusTotal analysis]($vt_report_url) was submitted and was still processing when this immutable release was published.
+EOF
+)"
+fi
+readonly security_scan_summary
+
 readonly release_notes="$WORK_ROOT/output/release-notes.md"
 cat >"$release_notes" <<EOF
-## TikTok Morphe AutoBuild
+## Download
+
+[**Download $output_apk_name**](https://github.com/$build_repository/releases/download/$build_tag/$output_apk_name)
+
+TikTok **$version_name** with Morphe patches **$patch_tag**. Built automatically from the pinned stock APK and signed with the project's persistent update key.
+
+SHA-256: \`$patched_sha256\`
+
+$security_scan_summary
+
+<details>
+<summary><strong>What's changed in patches $patch_tag</strong></summary>
+
+$patch_changelog
+
+</details>
+
+<details>
+<summary><strong>Build details and provenance</strong></summary>
 
 | Input | Value |
 |---|---|
-| TikTok | \`$package_name\` \`$version_name\` (\`$version_code\`) |
-| Base revision | \`r$base_revision\` from \`$base_release_tag\` |
+| Package | \`$package_name\` |
+| Version | \`$version_name\` (\`$version_code\`) |
+| Base | \`r$base_revision\` from \`$base_release_tag\` |
 | Base SHA-256 | \`$base_sha256\` |
 | Patch source | [$patch_repository]($patch_release_url) \`$patch_tag\` |
 | Morphe Desktop | \`$morphe_tag\` |
 | Bytecode mode | \`$bytecode_mode\` |
 | Signer | \`$signer_name\` |
 | Signing certificate SHA-256 | \`$signing_certificate_sha256\` |
-| Patched SHA-256 | \`$patched_sha256\` |
+| VirusTotal policy | \`$vt_mode\` (status: \`$vt_status\`) |
 
-Build policy: exact stable patch asset, upstream default patch selection,
-compatibility enforcement enabled, no \`--force\`, no \`--continue-on-error\`,
-no ABI stripping, and one persistent signing identity.
+Policy: exact stable patch and Morphe assets, verified GitHub digests, upstream default patches, compatibility enforcement, no \`--force\`, no \`--continue-on-error\`, no ABI stripping, and one persistent signing identity.
 
-Workflow run: $workflow_url
+[Workflow run]($workflow_url) · [Machine-readable build info](https://github.com/$build_repository/releases/download/$build_tag/build-info.json)
+
+</details>
 EOF
 
 if gh release view "$build_tag" --repo "$build_repository" >/dev/null 2>&1; then
@@ -479,8 +578,6 @@ gh release create "$build_tag" \
   --notes-file "$release_notes" \
   --latest \
   "$output_apk" \
-  "$checksums" \
-  "$patch_result" \
-  "$provenance"
+  "$build_info"
 
 notice "Published immutable build release $build_tag."

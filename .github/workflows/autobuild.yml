@@ -10,6 +10,16 @@ on:
         required: false
         default: false
         type: boolean
+      virustotal_mode:
+        description: Override the manifest VirusTotal policy for this run
+        required: false
+        default: manifest
+        type: choice
+        options:
+          - manifest
+          - disabled
+          - lookup_only
+          - upload_public
   push:
     branches:
       - main
@@ -17,6 +27,7 @@ on:
       - ".github/workflows/autobuild.yml"
       - "original-apk/manifest.json"
       - "scripts/autobuild.sh"
+      - "scripts/virustotal.sh"
 
 permissions:
   contents: write
@@ -48,4 +59,6 @@ jobs:
           CHECK_ONLY: ${{ inputs.check_only || 'false' }}
           SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+          VT_MODE_OVERRIDE: ${{ inputs.virustotal_mode || 'manifest' }}
         run: bash scripts/autobuild.sh

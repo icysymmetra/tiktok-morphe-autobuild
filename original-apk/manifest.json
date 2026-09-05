@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "app": {
     "name": "TikTok",
     "package_name": "com.zhiliaoapp.musically",
@@ -24,6 +24,16 @@
     "repository": "MorpheApp/morphe-desktop",
     "channel": "stable",
     "bytecode_mode": "STRIP_FAST"
+  },
+  "security_scan": {
+    "provider": "virustotal",
+    "mode": "lookup_only",
+    "required": false,
+    "request_interval_seconds": 16,
+    "max_wait_seconds": 1200,
+    "block_on_detections": false,
+    "maximum_malicious": 0,
+    "maximum_suspicious": 0
   },
   "signing": {
     "alias": "Morphe",
