@@ -372,9 +372,12 @@ java -jar "$morphe_jar" patch \
 [[ -s "$output_apk" ]] || fail "Morphe did not produce the expected APK: $output_apk_name"
 [[ -s "$patch_result" ]] || fail "Morphe did not produce patch-result.json."
 jq -e --arg package "$package_name" --arg version "$version_name" '
-  .success == true and
+  # Morphe omits the success field when it retains its default true value.
+  (.success // true) == true and
   .packageName == $package and
   .packageVersion == $version and
+  (.patchingSteps | length >= 3) and
+  all(.patchingSteps[]; .success == true) and
   (.failedPatches | length == 0)
 ' "$patch_result" >/dev/null || fail "Morphe result JSON did not prove a complete successful patch run."
 actual_applied_count="$(jq -er '.appliedPatches | length' "$patch_result")"
