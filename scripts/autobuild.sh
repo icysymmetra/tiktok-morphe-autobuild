@@ -519,18 +519,16 @@ if [[ "$vt_status" == "found" || "$vt_status" == "analyzed" ]]; then
   vt_malicious_display="$(jq -er '.statistics.malicious // 0' "$virustotal_result")"
   vt_suspicious_display="$(jq -er '.statistics.suspicious // 0' "$virustotal_result")"
   vt_engine_total="$(jq -er '[.statistics[] | numbers] | add // 0' "$virustotal_result")"
+  vt_analysis_date="$(jq -er '.last_analysis_date | numbers' "$virustotal_result")"
+  vt_analysis_iso="$(date -u -d "@$vt_analysis_date" +'%Y-%m-%d %H:%M:%S UTC')"
   security_scan_summary="$(cat <<EOF
-## Security scan
-
-[VirusTotal report]($vt_report_url): **$vt_malicious_display malicious**, **$vt_suspicious_display suspicious** across $vt_engine_total engine results. Treat automated detections as signals, not a guarantee.
+**VirusTotal:** [$vt_malicious_display malicious · $vt_suspicious_display suspicious · $vt_engine_total engines — view report]($vt_report_url) · Fresh scan: $vt_analysis_iso
 EOF
 )"
 elif [[ "$vt_status" == "pending" ]]; then
   vt_report_url="$(jq -er '.report_url | strings' "$virustotal_result")"
   security_scan_summary="$(cat <<EOF
-## Security scan
-
-[VirusTotal analysis]($vt_report_url) was submitted and was still processing when this immutable release was published.
+**VirusTotal:** [Analysis pending — view report]($vt_report_url)
 EOF
 )"
 fi

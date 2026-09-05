@@ -65,9 +65,7 @@ readonly vt_report_url vt_malicious vt_suspicious vt_engine_total vt_analysis_is
 
 scan_section="$(cat <<EOF
 <!-- VIRUSTOTAL_SCAN_START -->
-## Security scan
-
-[VirusTotal report]($vt_report_url): **$vt_malicious malicious**, **$vt_suspicious suspicious** across $vt_engine_total engine results. Fresh analysis completed $vt_analysis_iso. Treat automated detections as signals, not a guarantee.
+**VirusTotal:** [$vt_malicious malicious · $vt_suspicious suspicious · $vt_engine_total engines — view report]($vt_report_url) · Fresh scan: $vt_analysis_iso
 <!-- VIRUSTOTAL_SCAN_END -->
 EOF
 )"
