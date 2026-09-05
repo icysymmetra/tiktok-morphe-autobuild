@@ -1,0 +1,13 @@
+# Local build inputs and outputs must never be committed.
+*.apk
+*.bks
+*.jar
+*.jks
+*.keystore
+*.mpp
+
+.work/
+build/
+input/
+tools/
+
