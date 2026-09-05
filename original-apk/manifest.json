@@ -7,12 +7,12 @@
     "version_code": 2024602030
   },
   "base_apk": {
-    "revision": 1,
+    "revision": 2,
     "source": {
       "provider": "APKMirror",
       "url": "https://www.apkmirror.com/apk/tiktok-pte-ltd/tik-tok-including-musical-ly/tiktok-46-2-3-release/tiktok-46-2-3-android-apk-download/"
     },
-    "release_tag": "base-tiktok-46.2.3-r1",
+    "release_tag": "base-tiktok-46.2.3-r2",
     "asset_name": "TikTok-46.2.3-stock.apk",
     "sha256": "2fbe277a568e0e820cb51b09bcf0c0d788dc4fb070e66025f12d11cd3ec16936"
   },

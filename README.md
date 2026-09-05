@@ -13,7 +13,7 @@ combination that does not already have a release.
 ## Current build contract
 
 - TikTok: `com.zhiliaoapp.musically` `46.2.3` (`2024602030`)
-- Base APK: immutable prerelease `base-tiktok-46.2.3-r1`
+- Base APK: immutable prerelease `base-tiktok-46.2.3-r2`
 - Patch source: `icysymmetra/tiktok-patches-for-morphe`, stable releases only
 - Morphe: latest stable `MorpheApp/morphe-desktop`
 - Bytecode mode: explicitly `STRIP_FAST`
@@ -33,6 +33,10 @@ combination that does not already have a release.
 8. Patch with explicit `STRIP_FAST`, compatibility enforcement, upstream defaults, and the persistent signing key.
 9. Require a successful Morphe result with zero failed patches and a valid APK archive.
 10. Publish the APK, checksums, Morphe result, and provenance as a new immutable release.
+
+GitHub release immutability is enforced for the repository. Published tags and
+assets cannot be moved, replaced, or deleted; the workflow performs all checks
+before asking GitHub to publish the release.
 
 There is deliberately no `--force`, `--continue-on-error`, automatic
 `STRIP_SAFE`/`FULL` fallback, ABI stripping, APK scraper, or committed signing
