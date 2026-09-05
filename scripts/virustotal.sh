@@ -8,11 +8,13 @@ readonly scan_mode="${3:?VirusTotal mode is required}"
 readonly result_path="${4:?Result path is required}"
 readonly api_base="${VT_API_BASE_URL:-https://www.virustotal.com/api/v3}"
 readonly request_interval="${VT_REQUEST_INTERVAL_SECONDS:-16}"
-readonly max_wait="${VT_MAX_WAIT_SECONDS:-1200}"
+readonly max_wait="${VT_MAX_WAIT_SECONDS:-3600}"
+readonly rate_limit_max_wait="${VT_RATE_LIMIT_MAX_WAIT_SECONDS:-3600}"
 readonly report_url="https://www.virustotal.com/gui/file/$apk_sha256"
 
 last_request_epoch=0
 request_sequence=0
+rate_limit_wait_used=0
 HTTP_STATUS=""
 
 notice() {
@@ -26,10 +28,12 @@ warning() {
 write_result() {
   local status="$1"
   local reason="${2:-}"
-  local analysis_id="${3:-}"
+  local result_analysis_id="${3:-}"
   local statistics="${4:-}"
   local last_analysis_date="${5:-}"
+  local engine_results="${6:-}"
   [[ -n "$statistics" ]] || statistics='{}'
+  [[ -n "$engine_results" ]] || engine_results='{}'
 
   jq -n \
     --arg mode "$scan_mode" \
@@ -37,9 +41,10 @@ write_result() {
     --arg reason "$reason" \
     --arg sha256 "$apk_sha256" \
     --arg report_url "$report_url" \
-    --arg analysis_id "$analysis_id" \
+    --arg analysis_id "$result_analysis_id" \
     --arg last_analysis_date "$last_analysis_date" \
     --argjson statistics "$statistics" \
+    --argjson engine_results "$engine_results" \
     '{
       schema_version: 1,
       provider: "virustotal",
@@ -47,10 +52,11 @@ write_result() {
       status: $status,
       reason: (if $reason == "" then null else $reason end),
       sha256: $sha256,
-      report_url: (if ($status == "found" or $status == "uploaded" or $status == "pending") then $report_url else null end),
+      report_url: (if ($status == "found" or $status == "analyzed" or $status == "pending") then $report_url else null end),
       analysis_id: (if $analysis_id == "" then null else $analysis_id end),
       last_analysis_date: (if $last_analysis_date == "" then null else ($last_analysis_date | tonumber) end),
-      statistics: $statistics
+      statistics: $statistics,
+      engine_results: $engine_results
     }' >"$result_path"
 }
 
@@ -70,9 +76,9 @@ api_request() {
   local response_file="$3"
   shift 3
 
-  local attempt=1
-  local headers_file curl_status retry_after
-  while (( attempt <= 5 )); do
+  local transport_attempt=1
+  local headers_file curl_status retry_after remaining_wait
+  while true; do
     wait_for_request_slot
     request_sequence=$((request_sequence + 1))
     headers_file="${result_path}.headers-${request_sequence}"
@@ -94,15 +100,16 @@ api_request() {
     last_request_epoch="$(date +%s)"
 
     if (( curl_status != 0 )); then
-      if (( attempt == 5 )); then
+      if (( transport_attempt == 5 )); then
         HTTP_STATUS="000"
         return 0
       fi
-      warning "request failed at the transport layer; retrying (attempt $attempt of 5)."
+      warning "request failed at the transport layer; retrying (attempt $transport_attempt of 5)."
       sleep "$request_interval"
-      attempt=$((attempt + 1))
+      transport_attempt=$((transport_attempt + 1))
       continue
     fi
+    transport_attempt=1
 
     if [[ "$HTTP_STATUS" != "429" ]]; then
       return 0
@@ -111,10 +118,15 @@ api_request() {
     retry_after="$(awk 'tolower($1) == "retry-after:" { gsub("\\r", "", $2); print $2; exit }' "$headers_file")"
     [[ "$retry_after" =~ ^[0-9]+$ ]] || retry_after=60
     (( retry_after >= request_interval )) || retry_after="$request_interval"
-    (( retry_after <= 300 )) || retry_after=300
+    remaining_wait=$((rate_limit_max_wait - rate_limit_wait_used))
+    if (( remaining_wait <= 0 )); then
+      warning "rate limit is still active after ${rate_limit_wait_used}s of bounded waiting."
+      return 0
+    fi
+    (( retry_after <= remaining_wait )) || retry_after="$remaining_wait"
     warning "rate limit reached; honoring Retry-After and waiting ${retry_after}s."
     sleep "$retry_after"
-    attempt=$((attempt + 1))
+    rate_limit_wait_used=$((rate_limit_wait_used + retry_after))
   done
 }
 
@@ -127,11 +139,22 @@ api_error_message() {
 write_file_report() {
   local status="$1"
   local response_file="$2"
-  local analysis_id="${3:-}"
-  local statistics last_analysis_date
+  local result_analysis_id="${3:-}"
+  local statistics last_analysis_date engine_results
   statistics="$(jq -c '.data.attributes.last_analysis_stats // {}' "$response_file")"
   last_analysis_date="$(jq -r '.data.attributes.last_analysis_date // empty' "$response_file")"
-  write_result "$status" "" "$analysis_id" "$statistics" "$last_analysis_date"
+  engine_results="$(jq -c '.data.attributes.last_analysis_results // {}' "$response_file")"
+  write_result "$status" "" "$result_analysis_id" "$statistics" "$last_analysis_date" "$engine_results"
+}
+
+write_analysis_report() {
+  local response_file="$1"
+  local result_analysis_id="$2"
+  local statistics analysis_date engine_results
+  statistics="$(jq -c '.data.attributes.stats // {}' "$response_file")"
+  analysis_date="$(jq -r '.data.attributes.date // empty' "$response_file")"
+  engine_results="$(jq -c '.data.attributes.results // {}' "$response_file")"
+  write_result "analyzed" "" "$result_analysis_id" "$statistics" "$analysis_date" "$engine_results"
 }
 
 mkdir -p "$(dirname -- "$result_path")"
@@ -178,60 +201,77 @@ if ! [[ "$max_wait" =~ ^[0-9]+$ ]]; then
   write_result "error" "maximum wait must be a non-negative integer"
   exit 0
 fi
+if ! [[ "$rate_limit_max_wait" =~ ^[0-9]+$ ]]; then
+  write_result "error" "rate-limit maximum wait must be a non-negative integer"
+  exit 0
+fi
 
 readonly lookup_response="${result_path}.lookup"
 api_request GET "$api_base/files/$apk_sha256" "$lookup_response"
 if [[ "$HTTP_STATUS" == "200" ]]; then
-  write_file_report "found" "$lookup_response"
-  notice "reused the existing report for $apk_sha256; no upload was performed."
-  exit 0
-fi
+  if [[ "$scan_mode" == "lookup_only" ]]; then
+    write_file_report "found" "$lookup_response"
+    notice "reused the existing report for $apk_sha256; no upload or rescan was performed."
+    exit 0
+  fi
 
-if [[ "$HTTP_STATUS" != "404" ]]; then
+  notice "an existing report was found; requesting a fresh analysis for this release."
+  readonly rescan_response="${result_path}.rescan"
+  api_request POST "$api_base/files/$apk_sha256/analyse" "$rescan_response"
+  if [[ "$HTTP_STATUS" != "200" && "$HTTP_STATUS" != "201" ]]; then
+    write_result "error" "rescan request failed with HTTP $HTTP_STATUS: $(api_error_message "$rescan_response")"
+    exit 0
+  fi
+  analysis_id="$(jq -er '.data.id | strings | select(length > 0)' "$rescan_response")" || {
+    write_result "error" "VirusTotal accepted the rescan without returning an analysis ID"
+    exit 0
+  }
+elif [[ "$HTTP_STATUS" == "404" ]]; then
+  if [[ "$scan_mode" == "lookup_only" ]]; then
+    write_result "not_found" "no existing report; lookup-only policy forbids uploads"
+    notice "no report exists and lookup-only policy kept the APK local."
+    exit 0
+  fi
+
+  apk_size="$(stat -c '%s' "$apk_path")"
+  readonly apk_size
+  if (( apk_size > 650000000 )); then
+    write_result "error" "APK exceeds VirusTotal's 650 MB public upload limit"
+    exit 0
+  fi
+  if (( apk_size > 200000000 )); then
+    warning "the APK is larger than 200 MB; VirusTotal warns that some engines may time out or skip large bundles."
+  fi
+
+  notice "upload_public is enabled; this APK will be shared with VirusTotal and its analysis partners."
+  readonly upload_url_response="${result_path}.upload-url"
+  api_request GET "$api_base/files/upload_url" "$upload_url_response"
+  if [[ "$HTTP_STATUS" != "200" ]]; then
+    write_result "error" "upload URL request failed with HTTP $HTTP_STATUS: $(api_error_message "$upload_url_response")"
+    exit 0
+  fi
+
+  upload_url="$(jq -er '.data | strings | select(length > 0)' "$upload_url_response")" || {
+    write_result "error" "VirusTotal did not return a large-file upload URL"
+    exit 0
+  }
+  readonly upload_url
+  readonly upload_response="${result_path}.upload"
+  api_request POST "$upload_url" "$upload_response" --form "file=@$apk_path"
+  if [[ "$HTTP_STATUS" != "200" && "$HTTP_STATUS" != "201" ]]; then
+    write_result "error" "upload failed with HTTP $HTTP_STATUS: $(api_error_message "$upload_response")"
+    exit 0
+  fi
+
+  analysis_id="$(jq -er '.data.id | strings | select(length > 0)' "$upload_response")" || {
+    write_result "error" "VirusTotal accepted the upload without returning an analysis ID"
+    exit 0
+  }
+else
   write_result "error" "lookup failed with HTTP $HTTP_STATUS: $(api_error_message "$lookup_response")"
   exit 0
 fi
 
-if [[ "$scan_mode" == "lookup_only" ]]; then
-  write_result "not_found" "no existing report; lookup-only policy forbids uploads"
-  notice "no report exists and lookup-only policy kept the APK local."
-  exit 0
-fi
-
-apk_size="$(stat -c '%s' "$apk_path")"
-readonly apk_size
-if (( apk_size > 650000000 )); then
-  write_result "error" "APK exceeds VirusTotal's 650 MB public upload limit"
-  exit 0
-fi
-if (( apk_size > 200000000 )); then
-  warning "the APK is larger than 200 MB; VirusTotal warns that some engines may time out or skip large bundles."
-fi
-
-notice "upload_public is enabled; this APK will be shared with VirusTotal and its analysis partners."
-readonly upload_url_response="${result_path}.upload-url"
-api_request GET "$api_base/files/upload_url" "$upload_url_response"
-if [[ "$HTTP_STATUS" != "200" ]]; then
-  write_result "error" "upload URL request failed with HTTP $HTTP_STATUS: $(api_error_message "$upload_url_response")"
-  exit 0
-fi
-
-upload_url="$(jq -er '.data | strings | select(length > 0)' "$upload_url_response")" || {
-  write_result "error" "VirusTotal did not return a large-file upload URL"
-  exit 0
-}
-readonly upload_url
-readonly upload_response="${result_path}.upload"
-api_request POST "$upload_url" "$upload_response" --form "file=@$apk_path"
-if [[ "$HTTP_STATUS" != "200" && "$HTTP_STATUS" != "201" ]]; then
-  write_result "error" "upload failed with HTTP $HTTP_STATUS: $(api_error_message "$upload_response")"
-  exit 0
-fi
-
-analysis_id="$(jq -er '.data.id | strings | select(length > 0)' "$upload_response")" || {
-  write_result "error" "VirusTotal accepted the upload without returning an analysis ID"
-  exit 0
-}
 readonly analysis_id
 readonly analysis_response="${result_path}.analysis"
 readonly deadline=$(( $(date +%s) + max_wait ))
@@ -246,16 +286,11 @@ while (( $(date +%s) < deadline )); do
 
   analysis_status="$(jq -r '.data.attributes.status // "unknown"' "$analysis_response")"
   if [[ "$analysis_status" == "completed" ]]; then
-    api_request GET "$api_base/files/$apk_sha256" "$lookup_response"
-    if [[ "$HTTP_STATUS" == "200" ]]; then
-      write_file_report "uploaded" "$lookup_response" "$analysis_id"
-    else
-      write_result "pending" "analysis completed but the file report is not available yet" "$analysis_id"
-    fi
-    notice "public upload analysis completed."
+    write_analysis_report "$analysis_response" "$analysis_id"
+    notice "fresh public analysis completed."
     exit 0
   fi
 done
 
 write_result "pending" "analysis did not complete within ${max_wait}s" "$analysis_id"
-warning "analysis is still pending; publishing the permanent report link without blocking the build."
+warning "analysis is still pending after the configured wait."

@@ -89,6 +89,7 @@ validate_manifest() {
     (.security_scan.mode == "disabled" or .security_scan.mode == "lookup_only" or .security_scan.mode == "upload_public") and
     (.security_scan.required | type == "boolean") and
     (.security_scan.request_interval_seconds | type == "number" and . >= 15 and floor == .) and
+    (.security_scan.rate_limit_max_wait_seconds | type == "number" and . >= 0 and floor == .) and
     (.security_scan.max_wait_seconds | type == "number" and . >= 0 and floor == .) and
     (.security_scan.block_on_detections | type == "boolean") and
     (.security_scan.maximum_malicious | type == "number" and . >= 0 and floor == .) and
@@ -187,6 +188,7 @@ signing_certificate_sha256="$(json_string '.signing.certificate_sha256' | tr '[:
 vt_manifest_mode="$(json_string '.security_scan.mode')"
 vt_required="$(jq -r '.security_scan.required' "$MANIFEST_PATH")"
 vt_request_interval="$(jq -er '.security_scan.request_interval_seconds | numbers' "$MANIFEST_PATH")"
+vt_rate_limit_max_wait="$(jq -er '.security_scan.rate_limit_max_wait_seconds | numbers' "$MANIFEST_PATH")"
 vt_max_wait="$(jq -er '.security_scan.max_wait_seconds | numbers' "$MANIFEST_PATH")"
 vt_block_on_detections="$(jq -r '.security_scan.block_on_detections' "$MANIFEST_PATH")"
 vt_maximum_malicious="$(jq -er '.security_scan.maximum_malicious | numbers' "$MANIFEST_PATH")"
@@ -201,7 +203,7 @@ readonly app_name package_name version_name version_code base_revision
 readonly base_source_provider base_source_url base_release_tag base_asset_name base_sha256
 readonly patch_repository morphe_repository bytecode_mode
 readonly signing_alias signer_name signing_certificate_sha256
-readonly vt_manifest_mode vt_required vt_request_interval vt_max_wait
+readonly vt_manifest_mode vt_required vt_request_interval vt_rate_limit_max_wait vt_max_wait
 readonly vt_block_on_detections vt_maximum_malicious vt_maximum_suspicious vt_mode_override vt_mode
 readonly check_only="${CHECK_ONLY:-false}"
 readonly workflow_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-unknown}"
@@ -412,6 +414,7 @@ readonly patched_sha256
 
 readonly virustotal_result="$WORK_ROOT/output/virustotal-result.json"
 VT_REQUEST_INTERVAL_SECONDS="$vt_request_interval" \
+VT_RATE_LIMIT_MAX_WAIT_SECONDS="$vt_rate_limit_max_wait" \
 VT_MAX_WAIT_SECONDS="$vt_max_wait" \
   bash "$SCRIPT_DIR/virustotal.sh" "$output_apk" "$patched_sha256" "$vt_mode" "$virustotal_result"
 
@@ -419,11 +422,19 @@ vt_status="$(jq -er '.status | strings' "$virustotal_result")"
 vt_reason="$(jq -r '.reason // empty' "$virustotal_result")"
 readonly vt_status vt_reason
 
-if [[ "$vt_required" == "true" && "$vt_status" != "found" && "$vt_status" != "uploaded" ]]; then
-  fail "VirusTotal is required, but its status is $vt_status${vt_reason:+: $vt_reason}."
+vt_requirement_met="false"
+if [[ "$vt_mode" == "lookup_only" && "$vt_status" == "found" ]]; then
+  vt_requirement_met="true"
+elif [[ "$vt_mode" == "upload_public" && "$vt_status" == "analyzed" ]]; then
+  vt_requirement_met="true"
+fi
+readonly vt_requirement_met
+
+if [[ "$vt_required" == "true" && "$vt_requirement_met" != "true" ]]; then
+  fail "VirusTotal did not produce the completed result required by $vt_mode policy; status is $vt_status${vt_reason:+: $vt_reason}."
 fi
 
-if [[ "$vt_block_on_detections" == "true" && ( "$vt_status" == "found" || "$vt_status" == "uploaded" ) ]]; then
+if [[ "$vt_block_on_detections" == "true" && ( "$vt_status" == "found" || "$vt_status" == "analyzed" ) ]]; then
   vt_malicious="$(jq -er '.statistics.malicious // 0' "$virustotal_result")"
   vt_suspicious="$(jq -er '.statistics.suspicious // 0' "$virustotal_result")"
   if (( vt_malicious > vt_maximum_malicious || vt_suspicious > vt_maximum_suspicious )); then
@@ -503,7 +514,7 @@ patch_changelog="$(jq -r '.body // ""' <<<"$patch_release_json" | awk '
 readonly patch_changelog
 
 security_scan_summary=""
-if [[ "$vt_status" == "found" || "$vt_status" == "uploaded" ]]; then
+if [[ "$vt_status" == "found" || "$vt_status" == "analyzed" ]]; then
   vt_report_url="$(jq -er '.report_url | strings' "$virustotal_result")"
   vt_malicious_display="$(jq -er '.statistics.malicious // 0' "$virustotal_result")"
   vt_suspicious_display="$(jq -er '.statistics.suspicious // 0' "$virustotal_result")"

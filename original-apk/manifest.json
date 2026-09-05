@@ -27,10 +27,11 @@
   },
   "security_scan": {
     "provider": "virustotal",
-    "mode": "lookup_only",
-    "required": false,
+    "mode": "upload_public",
+    "required": true,
     "request_interval_seconds": 16,
-    "max_wait_seconds": 1200,
+    "rate_limit_max_wait_seconds": 3600,
+    "max_wait_seconds": 3600,
     "block_on_detections": false,
     "maximum_malicious": 0,
     "maximum_suspicious": 0

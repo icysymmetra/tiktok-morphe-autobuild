@@ -18,7 +18,7 @@ combination that does not already have a release.
 - Morphe: latest stable `MorpheApp/morphe-desktop`
 - Bytecode mode: explicitly `STRIP_FAST`
 - Patch selection: upstream defaults
-- VirusTotal: `lookup_only` by default; public upload requires an explicit policy change or manual-run override
+- VirusTotal: required fresh public analysis for every new APK release
 - Signing: persistent Morphe BKS key, certificate SHA-256
   `43635fbdc8eb708ed8c484e3f1a4ec7234f0bd1b68de9408cbb6f0b0ee99cbf8`
 
@@ -33,7 +33,7 @@ combination that does not already have a release.
 7. On a match, download the stock APK from its immutable prerelease and verify the manifest SHA-256.
 8. Patch with explicit `STRIP_FAST`, compatibility enforcement, upstream defaults, and the persistent signing key.
 9. Require a successful Morphe result with zero failed patches and a valid APK archive.
-10. Apply the configured VirusTotal policy after patching and before publishing.
+10. Upload a new APK to VirusTotal, or request a fresh rescan when its hash already exists, then wait for a completed analysis.
 11. Publish the APK and one combined `build-info.json` as a new immutable release.
 
 ## Release layout
@@ -66,23 +66,29 @@ Configure `security_scan` in `original-apk/manifest.json` or override it for a
 manual workflow run:
 
 - `disabled`: make no VirusTotal requests.
-- `lookup_only` (default): look up the patched SHA-256 and reuse an existing
+- `lookup_only`: look up the patched SHA-256 and reuse an existing
   report, but never upload the APK.
-- `upload_public`: reuse an existing report when possible; otherwise upload the
-  APK through VirusTotal's large-file endpoint and poll the analysis.
+- `upload_public` (default): upload an unknown APK through VirusTotal's
+  large-file endpoint, or request a fresh rescan when it already exists, then
+  poll the exact analysis to completion.
 
 The integration spaces API requests by at least 16 seconds, honors HTTP `429`
-`Retry-After`, uses bounded retries, and stops polling after the configured
-`max_wait_seconds`. It is informational by default. `required` can make a
-missing result fail the build, and `block_on_detections` can enforce the
-configured malicious/suspicious thresholds.
+`Retry-After`, can spend up to 60 minutes waiting out rate limits across a run,
+and then allows another 60 minutes for the analysis itself. If a daily quota
+cannot recover within that bound, the build stops safely and a later scheduled
+run retries it. The workflow refuses to publish without a completed fresh
+analysis. Detection counts remain
+informational; `block_on_detections` can separately enforce the configured
+malicious/suspicious thresholds. Complete per-engine results are preserved in
+`build-info.json`, not just the summary counts shown in the release notes.
 
 `upload_public` requires a repository secret named `VT_API_KEY`. Public
 VirusTotal submissions are shared with its community and analysis partners, and
 the free public API is for non-commercial use. VirusTotal accepts large uploads
 up to 650 MB but warns that files over 200 MB may receive incomplete engine
-coverage; this APK is in that warning range. Keep `lookup_only` unless public
-submission is deliberate.
+coverage; this APK is in that warning range. The configured `upload_public`
+policy therefore provides the fullest public VirusTotal result available, but
+cannot make unsupported or timed-out engines inspect a 564 MB APK.
 
 ## Updating TikTok
 
