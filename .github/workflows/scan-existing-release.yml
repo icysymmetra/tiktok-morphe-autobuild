@@ -1,0 +1,36 @@
+name: VirusTotal release backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing immutable build release tag to scan
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: virustotal-backfill-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: Fresh scan and annotate release
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out builder configuration
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Scan existing release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          VT_REQUEST_INTERVAL_SECONDS: "16"
+          VT_RATE_LIMIT_MAX_WAIT_SECONDS: "3600"
+          VT_MAX_WAIT_SECONDS: "3600"
+        run: bash scripts/scan-existing-release.sh

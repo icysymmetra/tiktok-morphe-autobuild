@@ -82,6 +82,12 @@ informational; `block_on_detections` can separately enforce the configured
 malicious/suspicious thresholds. Complete per-engine results are preserved in
 `build-info.json`, not just the summary counts shown in the release notes.
 
+For a release created before this policy, run **Actions -> VirusTotal release
+backfill**, enter its exact build release tag, and wait for completion. The
+backfill downloads and verifies the existing APK, requests a fresh analysis,
+then adds or replaces a marked VirusTotal section in the editable release notes.
+It never changes the immutable APK asset or tag.
+
 `upload_public` requires a repository secret named `VT_API_KEY`. Public
 VirusTotal submissions are shared with its community and analysis partners, and
 the free public API is for non-commercial use. VirusTotal accepts large uploads
