@@ -28,7 +28,7 @@
   "signing": {
     "alias": "Morphe",
     "signer": "Morphe",
+    "store_password_mode": "none",
     "certificate_sha256": "43635fbdc8eb708ed8c484e3f1a4ec7234f0bd1b68de9408cbb6f0b0ee99cbf8"
   }
 }
-

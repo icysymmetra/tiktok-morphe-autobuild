@@ -53,15 +53,19 @@ input gets a new revision and therefore a new output release tag.
 
 ## Signing secrets
 
-The workflow expects three GitHub Actions secrets:
+The workflow expects two GitHub Actions secrets:
 
 - `SIGNING_KEYSTORE_BASE64`
-- `SIGNING_STORE_PASSWORD`
 - `SIGNING_KEY_PASSWORD`
 
 The keystore is reconstructed only inside the ephemeral runner and is never
 uploaded as an artifact. Keep an offline backup: losing the private key breaks
 Android update compatibility for every APK previously signed with it.
+
+The current Morphe BKS file has no store-integrity password, so the workflow
+intentionally omits `--keystore-password`. Its `Morphe` private-key entry still
+uses `SIGNING_KEY_PASSWORD`. Passing an empty store password is not equivalent
+to omitting the option for this BKS file.
 
 ## Manual checks
 
@@ -72,4 +76,3 @@ APK or using the signing key.
 Scheduled workflows in inactive public repositories can eventually be disabled
 by GitHub. If that happens, re-enable the workflow from the Actions tab or run it
 manually.
-

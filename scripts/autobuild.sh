@@ -87,6 +87,7 @@ validate_manifest() {
     .morphe.bytecode_mode == "STRIP_FAST" and
     (.signing.alias | type == "string" and length > 0) and
     (.signing.signer | type == "string" and length > 0) and
+    .signing.store_password_mode == "none" and
     (.signing.certificate_sha256 | type == "string" and test("^[0-9a-fA-F]{64}$"))
   ' "$MANIFEST_PATH" >/dev/null || fail "Manifest validation failed: $MANIFEST_PATH"
 }
@@ -334,7 +335,6 @@ if [[ "$check_only" == "true" ]]; then
 fi
 
 : "${SIGNING_KEYSTORE_BASE64:?SIGNING_KEYSTORE_BASE64 is required for a build}"
-: "${SIGNING_STORE_PASSWORD:?SIGNING_STORE_PASSWORD is required for a build}"
 : "${SIGNING_KEY_PASSWORD:?SIGNING_KEY_PASSWORD is required for a build}"
 
 base_release_json="$(gh release view "$base_release_tag" \
@@ -361,7 +361,6 @@ java -jar "$morphe_jar" patch \
   --patches="$patch_file" \
   --bytecode-mode="$bytecode_mode" \
   --keystore="$signing_keystore" \
-  --keystore-password="$SIGNING_STORE_PASSWORD" \
   --keystore-entry-alias="$signing_alias" \
   --keystore-entry-password="$SIGNING_KEY_PASSWORD" \
   --signer="$signer_name" \
