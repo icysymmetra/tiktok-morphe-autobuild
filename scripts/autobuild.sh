@@ -401,13 +401,15 @@ java -jar "$morphe_jar" patch \
 [[ -s "$output_apk" ]] || fail "Morphe did not produce the expected APK: $output_apk_name"
 [[ -s "$patch_result" ]] || fail "Morphe did not produce patch-result.json."
 jq -e --arg package "$package_name" --arg version "$version_name" '
-  # Morphe omits the success field when it retains its default true value.
-  (.success // true) == true and
+  # Desktop 2.x uses stepResults; older releases used patchingSteps and
+  # omitted success when it retained its default true value.
+  (.stepResults // .patchingSteps) as $steps |
+  (if has("success") then .success else true end) == true and
   .packageName == $package and
   .packageVersion == $version and
-  (.patchingSteps | length >= 3) and
-  all(.patchingSteps[]; .success == true) and
-  (.failedPatches | length == 0)
+  ($steps | type == "array" and length >= 3) and
+  all($steps[]; .success == true) and
+  (.failedPatches | type == "array" and length == 0)
 ' "$patch_result" >/dev/null || fail "Morphe result JSON did not prove a complete successful patch run."
 actual_applied_count="$(jq -er '.appliedPatches | length' "$patch_result")"
 [[ "$actual_applied_count" == "$enabled_patch_count" ]] || fail "Morphe applied $actual_applied_count patches, but $enabled_patch_count were enabled by default."
