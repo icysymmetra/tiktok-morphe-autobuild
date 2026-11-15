@@ -29,10 +29,14 @@ json_string() {
 asset_from_release() {
   local release_json="$1"
   local suffix="$2"
-  jq -cer --arg suffix "$suffix" '
-    [.assets[] | select(.name | endswith($suffix))]
+  local exact_name="${3:-}"
+  jq -cer --arg suffix "$suffix" --arg exact_name "$exact_name" '
+    [.assets[] | select(if $exact_name != "" then .name == $exact_name
+                       else .name | endswith($suffix) end)]
     | if length == 1 then .[0]
-      else error("expected exactly one release asset ending in " + $suffix)
+      else error("expected exactly one release asset " +
+                 (if $exact_name != "" then "named " + $exact_name
+                  else "ending in " + $suffix end))
       end
   ' <<<"$release_json"
 }
@@ -219,7 +223,7 @@ patch_release_json="$(gh api "repos/$patch_repository/releases/latest")"
 [[ "$(jq -r '.prerelease' <<<"$patch_release_json")" == "false" ]] || fail "Latest patch release is a prerelease."
 patch_tag="$(jq -er '.tag_name' <<<"$patch_release_json")"
 patch_release_url="$(jq -er '.html_url' <<<"$patch_release_json")"
-patch_asset_json="$(asset_from_release "$patch_release_json" '.mpp')"
+patch_asset_json="$(asset_from_release "$patch_release_json" '.mpp' "patches-${patch_tag#v}.mpp")"
 patch_asset_name="$(jq -er '.name' <<<"$patch_asset_json")"
 patch_asset_digest="$(jq -r '.digest // empty' <<<"$patch_asset_json")"
 readonly patch_tag patch_release_url patch_asset_name patch_asset_digest

@@ -24,7 +24,7 @@ combination that does not already have a release.
 
 ## Build flow
 
-1. Resolve the latest non-draft, non-prerelease patch release.
+1. Resolve the latest non-draft, non-prerelease patch release and select `patches-<release version>.mpp` matching its tag. Other bundles attached to that release are ignored; a missing or duplicate exact match stops the build.
 2. Stop immediately if the exact base-revision/patch combination already has a release.
 3. Resolve the latest stable Morphe Desktop release.
 4. Download the exact `.mpp` and `-all.jar` assets and verify their GitHub SHA-256 digests when available.
