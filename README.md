@@ -12,8 +12,8 @@ combination that does not already have a release.
 
 ## Current build contract
 
-- TikTok: `com.zhiliaoapp.musically` `46.2.3` (`2024602030`)
-- Base APK: immutable prerelease `base-tiktok-46.2.3-r2`
+- TikTok: `com.zhiliaoapp.musically` `47.4.3` (`2024704030`)
+- Base APK: immutable prerelease `base-tiktok-47.4.3-r1`
 - Patch source: `icysymmetra/tiktok-patches-for-morphe`, stable releases only
 - Morphe: latest stable `MorpheApp/morphe-desktop`
 - Bytecode mode: explicitly `STRIP_FAST`

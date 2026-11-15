@@ -273,7 +273,7 @@ java -jar "$morphe_jar" list-versions \
   --filter-package-names="$package_name" 2>&1 | tee "$compatibility_output"
 
 target_patch_count="$(awk -v version="$version_name" '
-  $1 == version && $2 ~ /^\(/ {
+  $1 == version && /\([0-9]+ patches?\)[[:space:]]*$/ {
     line = $0
     sub(/^.*\(/, "", line)
     sub(/ patches?\).*$/, "", line)
@@ -283,7 +283,7 @@ target_patch_count="$(awk -v version="$version_name" '
 ' "$compatibility_output")"
 
 if [[ -z "$target_patch_count" || "$target_patch_count" != "$enabled_patch_count" ]]; then
-  supported_versions="$(awk '$2 ~ /^\(/ { print "- `" $1 "`" }' "$compatibility_output")"
+  supported_versions="$(awk '$1 ~ /^[0-9]+(\.[0-9]+)+$/ && /\([0-9]+ patches?\)[[:space:]]*$/ { print "- `" $1 "`" }' "$compatibility_output")"
   [[ -n "$supported_versions" ]] || supported_versions="- Morphe did not report a compatible version. See the captured output below."
   incompatible_default_patches="$(awk -v version="$version_name" '
     BEGIN { RS = ""; FS = "\n" }
